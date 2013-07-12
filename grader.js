@@ -22,10 +22,19 @@ References:
 */
 
 var fs = require('fs');
+var Q = require('q');
 var program = require('commander');
 var cheerio = require('cheerio');
-var HTMLFILE_DEFAULT = "index.html";
+var rest = require('restler');
 var CHECKSFILE_DEFAULT = "checks.json";
+
+var str = function(v) {
+    if (v) {
+        return v.toString();
+    } else {
+        return v;
+    }
+};
 
 var assertFileExists = function(infile) {
     var instr = infile.toString();
@@ -36,16 +45,37 @@ var assertFileExists = function(infile) {
     return instr;
 };
 
-var cheerioHtmlFile = function(htmlfile) {
-    return cheerio.load(fs.readFileSync(htmlfile));
+var loadHtmlFile = function(filename) {
+    var deferred = Q.defer();
+    fs.readFile(filename.toString(), function(error, text) {
+        if (error) {
+            deferred.reject(new Error(error));
+        } else {
+            deferred.resolve(text);
+        }
+    });
+    return deferred.promise;
+};
+
+var loadHtmlUrl = function(url) {
+    var deferred = Q.defer();
+    rest.get(url.toString()).on('complete', function(result, response){
+        if (result instanceof Error) {
+            console.log("error accessing url %s: %s", url.toString(), response);
+            deferred.reject(result);
+        } else {
+            deferred.resolve(result);
+        }
+    });
+    return deferred.promise;
 };
 
 var loadChecks = function(checksfile) {
     return JSON.parse(fs.readFileSync(checksfile));
 };
 
-var checkHtmlFile = function(htmlfile, checksfile) {
-    $ = cheerioHtmlFile(htmlfile);
+var checkHtml = function(html, checksfile) {
+    $ = cheerio.load(html);
     var checks = loadChecks(checksfile).sort();
     var out = {};
     for(var ii in checks) {
@@ -56,13 +86,28 @@ var checkHtmlFile = function(htmlfile, checksfile) {
 };
 
 if(require.main == module) {
+    var html_promise;
+
     program
         .option('-c, --checks ', 'Path to checks.json', assertFileExists, CHECKSFILE_DEFAULT)
-        .option('-f, --file ', 'Path to index.html', assertFileExists, HTMLFILE_DEFAULT)
+        .option('-f, --file [file]', 'Path to index.html', str, '')
+        .option('-u, --url [url]', 'URL path to index.html', str, '')
         .parse(process.argv);
-    var checkJson = checkHtmlFile(program.file, program.checks);
-    var outJson = JSON.stringify(checkJson, null, 4);
-    console.log(outJson);
+    if (program.file) {
+        html_promise = loadHtmlFile(program.file);
+    } else if (program.url) {
+        html_promise = loadHtmlUrl(program.url);
+    } else {
+        console.log("Either file or url required. Exiting.");
+        process.exit(1);
+    }
+    html_promise.then(function(html){
+        var checkJson = checkHtml(html, program.checks);
+        var outJson = JSON.stringify(checkJson, null, 4);
+        console.log(outJson);
+    }, function(reason){
+        console.log(reason);
+    });
 } else {
     exports.checkHtmlFile = checkHtmlFile;
 }
